@@ -1,5 +1,5 @@
 name: 'Archynt Architecture Scan'
-description: 'Static architecture check for pull requests — cyclic dependencies, coupling, single points of failure and dead code. Free for public repos, no signup.'
+description: 'Free architecture check on every PR — cycles, coupling, single points of failure, dead code. Public repos, no signup.'
 author: 'Archynt'
 
 branding:

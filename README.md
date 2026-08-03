@@ -31,7 +31,7 @@ servers.
 Add to your README:
 
 ```markdown
-[![Architecture Score](https://img.shields.io/endpoint?url=https://archynt.com/api/v1/public/badge/OWNER/REPO)](https://archynt.com)
+[![Architecture Score](https://img.shields.io/endpoint?url=https://api.archynt.com/api/v1/public/badge/OWNER/REPO)](https://archynt.com)
 ```
 
 Replace `OWNER/REPO` with your GitHub owner and repo name. The badge shows the verdict from the

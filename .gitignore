@@ -1,0 +1,64 @@
+./DS_Store
+DS_Store
+DS_Store?
+.DS_Store
+
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+## Node modules and go, and python and other language dependencies
+node_modules/
+vendor/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.go
+*.mod
+*.sum
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+## Ignore for java
+out/
+*.class
+*.jar
+*.war
+*.ear
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+# Local env (secrets / test) — never commit; keep the template
+.env
+.env.*
+!.env.example
+
+# Local secrets (Firebase service-account JSON, etc.) — never commit
+.secrets/

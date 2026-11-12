@@ -12,6 +12,19 @@ const BOT_TYPE = 'Bot';
 const MAX_PAGES = 10;
 const PER_PAGE = 100;
 const CREATE_OR_UPDATE = 'create-or-update';
+/**
+ * GitHub shows at most 10 annotations per level for each workflow step. Two are left for this
+ * action's own messages: the read-only notice on fork PRs and the warning when the comment fails.
+ */
+const MAX_ANNOTATIONS_PER_LEVEL = 8;
+/** Annotation level from the Checks API to the `@actions/core` function that writes it. */
+const LEVEL_TO_CORE = { failure: 'error', warning: 'warning', notice: 'notice' };
+/**
+ * Annotate only files the PR changed. A `pull_request` workflow runs on the PR's merge commit while
+ * Archynt analyzes the head; on a file the base also changed, a line could be off. Set from the
+ * manual check before release.
+ */
+const ONLY_CHANGED_FILES = false;
 const UPDATE_ONLY = 'update-only';
 
 const READ_ONLY_NOTE =
@@ -39,7 +52,8 @@ class NewerCommit extends Error {}
 
 /**
  * Runs Archynt's public scan for the pull request in `context` and reports it: always in the job
- * summary, and in a single PR comment that every later run edits. Everything the PR author controls
+ * summary, as line annotations in "Files changed", and in a single PR comment that every later run
+ * edits. Everything the PR author controls
  * (branch names, titles) travels as JSON built here, never through a shell.
  *
  * The comment is Archynt's own only if it starts with the marker and was written by
@@ -111,8 +125,57 @@ async function run({ github, context, core, fetchImpl = fetch, env = process.env
     return;
   }
 
-  await core.summary.addRaw(result.summaryMarkdown).write();
+  core.summary.addRaw(result.summaryMarkdown);
+  annotate(core, result);
+  await core.summary.write();
   await publishComment(comments, `${MARKER}\n${result.summaryMarkdown}`, CREATE_OR_UPDATE, true);
+}
+
+/**
+ * Marks the findings on their lines in "Files changed" with the annotations Archynt chose, most
+ * important first, through `@actions/core`, which escapes every value: paths come from the scanned
+ * repository. Needs no token, so it also works on fork PRs. A response from an Archynt version without
+ * annotations leaves nothing to do.
+ *
+ * @param {object} core
+ * @param {{annotations?: unknown, annotationsOmitted?: unknown}} result
+ */
+function annotate(core, result) {
+  if (!Array.isArray(result.annotations)) {
+    return;
+  }
+  const perLevel = { failure: 0, warning: 0, notice: 0 };
+  let dropped = 0;
+  for (const annotation of result.annotations.filter(isValidAnnotation)) {
+    if (ONLY_CHANGED_FILES && annotation.inChangedFile !== true) {
+      continue;
+    }
+    if (perLevel[annotation.level] >= MAX_ANNOTATIONS_PER_LEVEL) {
+      dropped++;
+      continue;
+    }
+    perLevel[annotation.level]++;
+    core[LEVEL_TO_CORE[annotation.level]](String(annotation.message ?? ''), {
+      title: String(annotation.title ?? ''),
+      file: annotation.path,
+      startLine: annotation.startLine,
+      endLine: annotation.endLine,
+    });
+  }
+  const omitted = (Number.isInteger(result.annotationsOmitted) ? result.annotationsOmitted : 0) + dropped;
+  if (omitted > 0) {
+    core.summary.addRaw(`\n\n_${omitted} more locations are not annotated: GitHub shows up to 10 per level in a ` +
+      'workflow step. All findings are listed above._');
+  }
+}
+
+/** @param {unknown} annotation */
+function isValidAnnotation(annotation) {
+  return annotation !== null && typeof annotation === 'object'
+    && typeof annotation.path === 'string' && annotation.path.length > 0
+    && Number.isInteger(annotation.startLine) && annotation.startLine >= 1
+    && Number.isInteger(annotation.endLine) && annotation.endLine >= annotation.startLine
+    && Object.prototype.hasOwnProperty.call(LEVEL_TO_CORE, annotation.level);
 }
 
 /**

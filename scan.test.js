@@ -20,7 +20,7 @@ const BOT = { login: 'github-actions[bot]', type: 'Bot' };
  * @param {{status?: number, json?: any, fetchError?: Error, headSha?: string, comments?: Array<{body: string, user: object}>, errors?: Record<string, {status: number, message: string}>}} options
  */
 function harness(options = {}) {
-  const calls = { requests: [], summary: [], notices: [], warnings: [], failures: [], listed: 0, created: 0 };
+  const calls = { requests: [], summary: [], notices: [], warnings: [], failures: [], annotations: [], listed: 0, created: 0 };
   const errors = options.errors ?? {};
   let nextId = 100;
   const comments = (options.comments ?? []).map((comment) => ({ id: ++nextId, ...comment }));
@@ -38,10 +38,18 @@ function harness(options = {}) {
       return summary;
     },
   };
+  const annotated = (level, plain) => (message, properties) => {
+    if (properties) {
+      calls.annotations.push({ level, message, properties });
+    } else {
+      plain.push(message);
+    }
+  };
   const core = {
     summary,
-    notice: (message) => calls.notices.push(message),
-    warning: (message) => calls.warnings.push(message),
+    notice: annotated('notice', calls.notices),
+    warning: annotated('warning', calls.warnings),
+    error: annotated('error', calls.failures),
     setFailed: (message) => calls.failures.push(message),
   };
   const github = {
@@ -296,4 +304,81 @@ test('a successful status with an unexpected body fails the job instead of crash
   await run(noSummary.deps);
   assert.match(noSummary.calls.failures[0], /unexpected response/);
   assert.deepEqual(noSummary.comments, []);
+});
+
+/** @param {number} count @param {string} level */
+function annotations(count, level, from = 0) {
+  return Array.from({ length: count }, (_, index) => ({
+    path: `src/${level}${from + index}.java`,
+    startLine: 12,
+    endLine: 12,
+    level,
+    title: `Finding ${level} ${from + index}`,
+    message: `detail\nFingerprint: v1:X:${level}${from + index}`,
+    inChangedFile: true,
+  }));
+}
+
+test('annotations from the scan are written on their lines with core, by level, before the comment', async () => {
+  const { calls, deps } = harness({ json: { ...ANALYZED, annotations: [...annotations(1, 'failure'), ...annotations(1, 'warning')], annotationsOmitted: 0 } });
+
+  await run(deps);
+
+  assert.deepEqual(calls.annotations, [
+    { level: 'error', message: 'detail\nFingerprint: v1:X:failure0', properties: { title: 'Finding failure 0', file: 'src/failure0.java', startLine: 12, endLine: 12 } },
+    { level: 'warning', message: 'detail\nFingerprint: v1:X:warning0', properties: { title: 'Finding warning 0', file: 'src/warning0.java', startLine: 12, endLine: 12 } },
+  ]);
+  assert.deepEqual(calls.failures, []);
+  assert.deepEqual(calls.summary, ['## Archynt\nFAIL']);
+});
+
+test('at most eight annotations per level, and the job summary says how many were left out', async () => {
+  const sent = [...annotations(10, 'failure'), ...annotations(10, 'warning'), ...annotations(10, 'notice')];
+  const { calls, deps } = harness({ json: { ...ANALYZED, annotations: sent, annotationsOmitted: 4 } });
+
+  await run(deps);
+
+  for (const level of ['error', 'warning', 'notice']) {
+    assert.equal(calls.annotations.filter((annotation) => annotation.level === level).length, 8, level);
+  }
+  assert.deepEqual(calls.annotations.filter((annotation) => annotation.level === 'error').map((annotation) => annotation.properties.file),
+    annotations(8, 'failure').map((annotation) => annotation.path));
+  assert.match(calls.summary[1], /_10 more locations are not annotated/);
+});
+
+test('a fork PR still gets its annotations and the read-only notice', async () => {
+  const { calls, deps } = harness({
+    json: { ...ANALYZED, annotations: annotations(8, 'notice'), annotationsOmitted: 0 },
+    errors: { create: { status: 403, message: 'Resource not accessible by integration' } },
+  });
+
+  await run(deps);
+
+  assert.equal(calls.annotations.length, 8);
+  assert.equal(calls.notices.length, 1);
+  assert.match(calls.summary.at(-1), /read-only token/);
+  assert.deepEqual(calls.failures, []);
+});
+
+test('a scan from an Archynt without annotations, or with malformed ones, annotates nothing', async () => {
+  const old = harness({ json: ANALYZED });
+  await run(old.deps);
+  assert.deepEqual(old.calls.annotations, []);
+
+  const malformed = harness({ json: { ...ANALYZED, annotations: [
+    { path: '', startLine: 1, endLine: 1, level: 'failure' },
+    { path: 'a.java', startLine: 0, endLine: 1, level: 'failure' },
+    { path: 'a.java', startLine: 3, endLine: 1, level: 'failure' },
+    { path: 'a.java', startLine: 1, endLine: 1, level: 'debug' },
+    null,
+  ] } });
+  await run(malformed.deps);
+  assert.deepEqual(malformed.calls.annotations, []);
+  assert.deepEqual(malformed.calls.failures, []);
+});
+
+test('scan.js never writes a workflow command by hand', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'scan.js'), 'utf8');
+
+  assert.doesNotMatch(source, /['"`]::(error|warning|notice)/);
 });

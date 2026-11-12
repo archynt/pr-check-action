@@ -71,11 +71,24 @@ and neither are comments from action versions older than `v1.2.0`.
 
 A `FAIL` verdict does not fail the job. The job fails only when the scan itself could not run.
 
+## Findings on their lines
+
+New and worsened findings are also marked as **annotations in "Files changed"**, on the line where the
+class is declared. In the comment, each new or worsened finding links to that line in the exact commit
+that was scanned.
+
+- GitHub shows up to 10 annotations per level in a workflow step, so the action writes at most `8`
+  per level (errors, warnings, notices) and keeps the rest for its own messages. The job summary says
+  how many locations were left out; every finding is still listed in the summary and the comment.
+- Dead code candidates are listed but not annotated yet.
+- Annotations need no token, so they also appear on PRs from forks.
+
 ## Pull requests from forks
 
 Keep the trigger as `on: pull_request`. For a PR from a fork, GitHub gives the workflow a
 **read-only** token whatever `permissions` says, so the action cannot comment. The scan still runs:
-the result is in the job summary of the run, and the job does not fail because of the missing comment.
+the result is in the job summary of the run, the findings are still annotated in "Files changed", and
+the job does not fail because of the missing comment.
 
 Do **not** switch to `pull_request_target` to get the comment: that trigger runs with your
 repository's secrets and a write token on events a fork author controls. If you want the comment on

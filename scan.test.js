@@ -8,13 +8,27 @@ const run = require('./scan');
 
 const BASE_SHA = '1111111111111111111111111111111111111111';
 const HEAD_SHA = '2222222222222222222222222222222222222222';
+const NEWER_SHA = '3333333333333333333333333333333333333333';
 const HOSTILE_BRANCH = 'a";echo${IFS}pwned;#$(id)`id`';
+const MARKER = '<!-- archynt:pr-check:v1 -->';
+const BOT = { login: 'github-actions[bot]', type: 'Bot' };
 
 /**
- * @param {{status?: number, json?: any, commentError?: {status: number, message: string}, fetchError?: Error}} options
+ * A GitHub with state for the workflow token: the PR's comments (with their author), the PR head,
+ * and failures to inject per call (`{list, create, update, delete, pull}` → `{status, message}`).
+ *
+ * @param {{status?: number, json?: any, fetchError?: Error, headSha?: string, comments?: Array<{body: string, user: object}>, errors?: Record<string, {status: number, message: string}>}} options
  */
 function harness(options = {}) {
-  const calls = { requests: [], comments: [], summary: [], notices: [], warnings: [], failures: [] };
+  const calls = { requests: [], summary: [], notices: [], warnings: [], failures: [], listed: 0, created: 0 };
+  const errors = options.errors ?? {};
+  let nextId = 100;
+  const comments = (options.comments ?? []).map((comment) => ({ id: ++nextId, ...comment }));
+  const fail = (name) => {
+    if (errors[name]) {
+      throw Object.assign(new Error(errors[name].message), { status: errors[name].status });
+    }
+  };
   const summary = {
     addRaw(text) {
       calls.summary.push(text);
@@ -32,12 +46,36 @@ function harness(options = {}) {
   };
   const github = {
     rest: {
+      pulls: {
+        async get() {
+          fail('pull');
+          return { data: { head: { sha: options.headSha ?? HEAD_SHA } } };
+        },
+      },
       issues: {
-        async createComment(comment) {
-          if (options.commentError) {
-            throw Object.assign(new Error(options.commentError.message), { status: options.commentError.status });
+        async listComments({ per_page: perPage, page }) {
+          fail('list');
+          calls.listed++;
+          const sorted = [...comments].sort((a, b) => a.id - b.id);
+          return { data: sorted.slice((page - 1) * perPage, page * perPage) };
+        },
+        async createComment({ body }) {
+          fail('create');
+          calls.created++;
+          comments.push({ id: ++nextId, body, user: BOT });
+        },
+        async updateComment({ comment_id: id, body }) {
+          fail('update');
+          const comment = comments.find((candidate) => candidate.id === id);
+          if (!comment) {
+            throw Object.assign(new Error('Not Found'), { status: 404 });
           }
-          calls.comments.push(comment);
+          comment.body = body;
+        },
+        async deleteComment({ comment_id: id }) {
+          fail('delete');
+          const index = comments.findIndex((candidate) => candidate.id === id);
+          comments.splice(index, 1);
         },
       },
     },
@@ -61,10 +99,11 @@ function harness(options = {}) {
     return { status, ok: status >= 200 && status < 300, json: async () => options.json ?? {} };
   };
   const env = { ARCHYNT_API_BASE_URL: 'https://api.example.test/', ARCHYNT_LANGUAGE: 'java' };
-  return { calls, deps: { github, context, core, fetchImpl, env } };
+  return { calls, comments, deps: { github, context, core, fetchImpl, env } };
 }
 
 const ANALYZED = { verdict: 'FAIL', summaryMarkdown: '## Archynt\nFAIL' };
+const RESULT_BODY = `${MARKER}\n## Archynt\nFAIL`;
 
 test('sends the exact commits of the PR as JSON, with the branch name passed through untouched', async () => {
   const { calls, deps } = harness({ json: ANALYZED });
@@ -94,29 +133,94 @@ test('action.yml runs no shell and interpolates nothing into the script', () => 
   assert.doesNotMatch(script, /\$\{\{/);
 });
 
-test('posts the summary as a comment and in the job summary, and a FAIL verdict does not fail the job', async () => {
-  const { calls, deps } = harness({ json: ANALYZED });
+test('the first run creates the marked comment, later runs edit it, and a FAIL verdict does not fail the job', async () => {
+  const first = harness({ json: ANALYZED });
+  await run(first.deps);
+  assert.deepEqual(first.comments.map((comment) => comment.body), [RESULT_BODY]);
+  assert.deepEqual(first.calls.summary, ['## Archynt\nFAIL']);
+  assert.deepEqual(first.calls.failures, []);
+
+  const later = harness({ json: { verdict: 'PASS', summaryMarkdown: '## Archynt\nPASS' }, comments: [{ body: RESULT_BODY, user: BOT }] });
+  await run(later.deps);
+  assert.deepEqual(later.comments.map((comment) => comment.body), [`${MARKER}\n## Archynt\nPASS`]);
+  assert.equal(later.calls.created, 0);
+});
+
+test('comments of people, other bots and pre-marker runs are never touched', async () => {
+  const human = { body: `${MARKER}\npasted by a person`, user: { login: 'alice', type: 'User' } };
+  const otherBot = { body: `${MARKER}\nother`, user: { login: 'archynt[bot]', type: 'Bot' } };
+  const legacy = { body: '## Archynt\nold run', user: BOT };
+  const { comments, deps } = harness({ json: ANALYZED, comments: [human, otherBot, legacy] });
 
   await run(deps);
 
-  assert.deepEqual(calls.comments, [{ owner: 'acme', repo: 'shop', issue_number: 7, body: '## Archynt\nFAIL' }]);
+  assert.deepEqual(comments.map((comment) => comment.body), [human.body, otherBot.body, legacy.body, RESULT_BODY]);
+});
+
+test('the comment is found on a later page and the search stops at ten pages', async () => {
+  const chatter = Array.from({ length: 230 }, (_, i) => ({ body: `chatter ${i}`, user: { login: 'alice', type: 'User' } }));
+  const found = harness({ json: ANALYZED, comments: [...chatter, { body: `${MARKER}\nold`, user: BOT }] });
+  await run(found.deps);
+  assert.equal(found.calls.listed, 3);
+  assert.equal(found.calls.created, 0);
+  assert.equal(found.comments.at(-1).body, RESULT_BODY);
+
+  const crowded = harness({ json: ANALYZED, comments: Array.from({ length: 1_100 }, (_, i) => ({ body: `c ${i}`, user: { login: 'a', type: 'User' } })) });
+  await run(crowded.deps);
+  assert.equal(crowded.calls.listed, 10);
+  assert.equal(crowded.calls.created, 1);
+});
+
+test('duplicates are deleted and the oldest own comment is kept', async () => {
+  const { comments, deps } = harness({
+    json: ANALYZED,
+    comments: [{ body: `${MARKER}\na`, user: BOT }, { body: `${MARKER}\nb`, user: BOT }],
+  });
+
+  await run(deps);
+
+  assert.deepEqual(comments.map((comment) => [comment.id, comment.body]), [[101, RESULT_BODY]]);
+});
+
+test('a comment that vanished before the edit is created again', async () => {
+  const { calls, comments, deps } = harness({
+    json: ANALYZED,
+    comments: [{ body: `${MARKER}\nold`, user: BOT }],
+    errors: { update: { status: 404, message: 'Not Found' } },
+  });
+
+  await run(deps);
+
+  assert.equal(calls.created, 1);
+  assert.equal(comments.at(-1).body, RESULT_BODY);
+});
+
+test('a run whose commit is no longer the PR head leaves the comment to the newer run', async () => {
+  const { calls, comments, deps } = harness({ json: ANALYZED, headSha: NEWER_SHA, comments: [{ body: `${MARKER}\nnewer`, user: BOT }] });
+
+  await run(deps);
+
+  assert.deepEqual(comments.map((comment) => comment.body), [`${MARKER}\nnewer`]);
   assert.deepEqual(calls.summary, ['## Archynt\nFAIL']);
+  assert.match(calls.notices[0], /newer commit/);
   assert.deepEqual(calls.failures, []);
 });
 
-test('a read-only token (fork PR) keeps the result in the job summary without failing', async () => {
-  const { calls, deps } = harness({ json: ANALYZED, commentError: { status: 403, message: 'Resource not accessible by integration' } });
+test('a read-only token (fork PR) keeps the result in the job summary without failing, at any step', async () => {
+  for (const step of ['create', 'list', 'pull']) {
+    const { calls, deps } = harness({ json: ANALYZED, errors: { [step]: { status: 403, message: 'Resource not accessible by integration' } } });
 
-  await run(deps);
+    await run(deps);
 
-  assert.equal(calls.summary[0], '## Archynt\nFAIL');
-  assert.match(calls.summary[1], /read-only token/);
-  assert.deepEqual(calls.failures, []);
-  assert.equal(calls.notices.length, 1);
+    assert.equal(calls.summary[0], '## Archynt\nFAIL', step);
+    assert.match(calls.summary[1], /read-only token/, step);
+    assert.deepEqual(calls.failures, [], step);
+    assert.equal(calls.notices.length, 1, step);
+  }
 });
 
 test('any other comment failure fails the job', async () => {
-  const { calls, deps } = harness({ json: ANALYZED, commentError: { status: 500, message: 'Server Error' } });
+  const { calls, deps } = harness({ json: ANALYZED, errors: { create: { status: 500, message: 'Server Error' } } });
 
   await run(deps);
 
@@ -124,31 +228,44 @@ test('any other comment failure fails the job', async () => {
 });
 
 test('a superseded commit is reported without commenting or failing', async () => {
-  const { calls, deps } = harness({ json: { status: 'SUPERSEDED', currentSha: '3333333333333333' } });
+  const { calls, comments, deps } = harness({ json: { status: 'SUPERSEDED', currentSha: '3333333333333333' } });
 
   await run(deps);
 
-  assert.deepEqual(calls.comments, []);
+  assert.deepEqual(comments, []);
+  assert.equal(calls.listed, 0);
   assert.deepEqual(calls.failures, []);
   assert.match(calls.notices[0], /3333333/);
 });
 
-test('a full Archynt queue warns without failing', async () => {
-  const { calls, deps } = harness({ status: 503, json: { status: 'UNAVAILABLE', reason: 'BUSY' } });
+test('a full Archynt queue warns without failing and turns an existing comment into a not-scanned notice', async () => {
+  const { calls, comments, deps } = harness({ status: 503, json: { status: 'UNAVAILABLE', reason: 'BUSY' }, comments: [{ body: RESULT_BODY, user: BOT }] });
 
   await run(deps);
 
   assert.equal(calls.warnings.length, 1);
   assert.deepEqual(calls.failures, []);
-  assert.deepEqual(calls.comments, []);
+  assert.equal(comments.length, 1);
+  assert.match(comments[0].body, /^<!-- archynt:pr-check:v1 -->/);
+  assert.match(comments[0].body, /Commit `2222222` was not analyzed:\*\* Archynt is busy/);
+  assert.match(comments[0].body, /no longer applies/);
 });
 
-test('a scan that could not run fails the job with its reason', async () => {
-  const { calls, deps } = harness({ status: 422, json: { status: 'UNAVAILABLE', reason: 'COMMIT_NOT_FOUND' } });
+test('a scan that could not run fails the job with its reason and never creates a comment', async () => {
+  const { calls, comments, deps } = harness({ status: 422, json: { status: 'UNAVAILABLE', reason: 'COMMIT_NOT_FOUND' } });
 
   await run(deps);
 
   assert.deepEqual(calls.failures, ['Archynt could not scan this pull request (HTTP 422: COMMIT_NOT_FOUND).']);
+  assert.deepEqual(comments, []);
+});
+
+test('a scan that could not run updates an existing comment', async () => {
+  const { comments, deps } = harness({ status: 422, json: { status: 'UNAVAILABLE', reason: 'COMMIT_NOT_FOUND' }, comments: [{ body: RESULT_BODY, user: BOT }] });
+
+  await run(deps);
+
+  assert.match(comments[0].body, /commit not available/);
 });
 
 test('an unreachable API fails the job', async () => {
@@ -178,5 +295,5 @@ test('a successful status with an unexpected body fails the job instead of crash
   const noSummary = harness({ json: { verdict: 'PASS' } });
   await run(noSummary.deps);
   assert.match(noSummary.calls.failures[0], /unexpected response/);
-  assert.deepEqual(noSummary.calls.comments, []);
+  assert.deepEqual(noSummary.comments, []);
 });

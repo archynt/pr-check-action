@@ -1,8 +1,8 @@
 # Archynt Architecture Scan
 
 Free, no-signup architecture check for public GitHub repos. Runs Archynt's static detectors
-(cyclic dependencies, coupling, single points of failure, dead code) on every PR and posts a
-summary comment — no account, no token shared with Archynt.
+(cyclic dependencies, coupling, single points of failure, dead code) on every PR and keeps one
+summary comment per PR up to date — no account, no token shared with Archynt.
 
 ## Usage
 
@@ -15,6 +15,9 @@ on: pull_request
 jobs:
   archynt-scan:
     runs-on: ubuntu-latest
+    concurrency:
+      group: archynt-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     permissions:
       pull-requests: write
     steps:
@@ -24,7 +27,8 @@ jobs:
 ```
 
 That's it — no `checkout` step needed, the scan runs against your repo directly from Archynt's
-servers.
+servers. The `concurrency` block is optional: when you push twice in a row it cancels the run for the
+older commit, so only the newest one scans.
 
 ## Badge
 
@@ -46,8 +50,24 @@ most recent scan (`PASS` / `WARN` / `FAIL`) and never triggers a scan itself —
    dashboard pipeline on both, and returns a verdict + Markdown summary. The head is compared against
    the commit the PR branched from, so changes that landed on the base branch afterwards are not
    blamed on the PR.
-3. This action writes that summary to the job summary and posts it as a PR comment, using the
+3. This action writes that summary to the job summary and to the PR's Archynt comment, using the
    workflow's own `GITHUB_TOKEN` — Archynt never receives or needs write access to your repository.
+
+## One comment per pull request
+
+The first scan of a PR creates a comment; every later push **edits that same comment**, so the
+conversation is not filled with one comment per push. The comment always describes the PR's newest
+commit:
+
+- A run for a commit that is no longer the PR head leaves the comment alone; the newer run writes it.
+- When a commit could not be scanned (Archynt busy, commit not available), the comment says so and
+  that the earlier result no longer applies. If the PR has no comment yet, none is created for that.
+- If someone deletes the comment, the next scan creates it again. If someone edits it, the next scan
+  replaces its text.
+
+The action only edits comments that start with its hidden `<!-- archynt:pr-check:v1 -->` marker and
+were written by `github-actions[bot]`. Comments by people or other bots are never edited or deleted,
+and neither are comments from action versions older than `v1.2.0`.
 
 A `FAIL` verdict does not fail the job. The job fails only when the scan itself could not run.
 

@@ -377,6 +377,43 @@ test('a scan from an Archynt without annotations, or with malformed ones, annota
   assert.deepEqual(malformed.calls.failures, []);
 });
 
+test('a scan judged by archynt.yml reaches the job summary, the comment and Files changed with this version', async () => {
+  const summaryMarkdown = '## Archynt\nConfig: `archynt.yml` @ `1111111` · 1 suppressed\n\n'
+    + '_This PR changes `archynt.yml`; the change applies to checks after it is merged._\n\n'
+    + '### Suppressed (1)\n- **[HIGH] Possible god class: Hub** — accepted in `archynt.yml`: `legacy facade`\n';
+  const response = {
+    verdict: 'PASS',
+    summaryMarkdown,
+    introduced: [],
+    worsened: [],
+    resolved: [],
+    annotations: [{
+      path: 'archynt.yml', startLine: 4, endLine: 4, level: 'warning', title: 'archynt.yml: CONFIG_RANGE',
+      message: 'expected a whole number between 1 and 1000. Found `0`.', inChangedFile: true,
+    }],
+    annotationsOmitted: 0,
+    config: {
+      status: 'APPLIED', sha: BASE_SHA, errors: [], errorCount: 0, headChanged: true,
+      headErrors: [{ code: 'CONFIG_RANGE', path: 'thresholds.coupling.highFanOut', line: 4, column: 17, message: 'expected a whole number between 1 and 1000. Found `0`.' }],
+      headErrorCount: 1, misnamedFile: null,
+    },
+    suppressed: [{ type: 'HIGH_COUPLING', severity: 'HIGH', title: 'Possible god class: Hub', fingerprint: 'v1:HIGH_COUPLING:Hub', suppressionReason: 'legacy facade', locations: [] }],
+    ignoredCount: 0,
+  };
+  const { calls, deps, comments } = harness({ json: response });
+
+  await run(deps);
+
+  assert.deepEqual(calls.summary, [summaryMarkdown]);
+  assert.deepEqual(comments.map((comment) => comment.body), [`${MARKER}\n${summaryMarkdown}`]);
+  assert.deepEqual(calls.annotations, [{
+    level: 'warning',
+    message: 'expected a whole number between 1 and 1000. Found `0`.',
+    properties: { title: 'archynt.yml: CONFIG_RANGE', file: 'archynt.yml', startLine: 4, endLine: 4 },
+  }]);
+  assert.deepEqual(calls.failures, []);
+});
+
 test('scan.js never writes a workflow command by hand', () => {
   const source = fs.readFileSync(path.join(__dirname, 'scan.js'), 'utf8');
 

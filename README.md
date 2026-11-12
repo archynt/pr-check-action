@@ -83,6 +83,31 @@ that was scanned.
 - Dead code candidates are listed but not annotated yet.
 - Annotations need no token, so they also appear on PRs from forks.
 
+## Configure it per repository
+
+Add an `archynt.yml` at the root of the repository to raise or lower thresholds, ignore generated or
+vendored code, and accept a known finding with a reason:
+
+```yaml
+version: 1
+ignorePaths:
+  - "generated/**"
+suppress:
+  - fingerprint: "v1:HIGH_COUPLING:OrderFacade"
+    reason: "Legacy facade; split planned for Q1"
+```
+
+- The file is read from the **base branch** of the PR (the commit the PR is compared against), never
+  from the PR itself. A PR that adds or changes `archynt.yml` is still judged by the current one; the
+  change applies after it is merged, and the scan points out errors in the proposed version.
+- A file with an error is ignored as a whole: the scan runs with the default settings and says why at
+  the top of the summary.
+- Copy a fingerprint from the `Fingerprint:` line of an annotation or the comment.
+
+On a PR from a fork, the workflow that sends the scan comes from the PR, so a fork author can change
+what is scanned; the verdict never fails the job either way. The full reference is at
+[archynt.com/docs/archynt-yml](https://archynt.com/docs/archynt-yml).
+
 ## Pull requests from forks
 
 Keep the trigger as `on: pull_request`. For a PR from a fork, GitHub gives the workflow a

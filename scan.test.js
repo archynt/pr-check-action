@@ -332,6 +332,25 @@ test('annotations from the scan are written on their lines with core, by level, 
   assert.deepEqual(calls.summary, ['## Archynt\nFAIL']);
 });
 
+test('a dead code candidate from the scan is written as a notice on its line with this version', async () => {
+  const deadCode = {
+    path: 'src/Unused.java',
+    startLine: 2,
+    endLine: 2,
+    level: 'notice',
+    title: 'Dead code candidate: Unused',
+    message: "Nothing in the analyzed code references it, and it isn't a recognized entry point.\nFingerprint: v1:DEAD_CODE:Unused",
+  };
+  const { calls, deps } = harness({ json: { ...ANALYZED, annotations: [deadCode], annotationsOmitted: 0 } });
+
+  await run(deps);
+
+  assert.deepEqual(calls.annotations, [
+    { level: 'notice', message: deadCode.message, properties: { title: deadCode.title, file: 'src/Unused.java', startLine: 2, endLine: 2 } },
+  ]);
+  assert.deepEqual(calls.failures, []);
+});
+
 test('at most eight annotations per level, and the job summary says how many were left out', async () => {
   const sent = [...annotations(10, 'failure'), ...annotations(10, 'warning'), ...annotations(10, 'notice')];
   const { calls, deps } = harness({ json: { ...ANALYZED, annotations: sent, annotationsOmitted: 4 } });

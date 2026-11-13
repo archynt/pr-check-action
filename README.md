@@ -80,7 +80,12 @@ that was scanned.
 - GitHub shows up to 10 annotations per level in a workflow step, so the action writes at most `8`
   per level (errors, warnings, notices) and keeps the rest for its own messages. The job summary says
   how many locations were left out; every finding is still listed in the summary and the comment.
-- Dead code candidates are listed but not annotated yet.
+- Dead code candidates are annotated as notices, after the other findings. A class is a candidate only
+  when nothing in the scanned code refers to it and it is not an entry point Archynt recognizes (a Java
+  `main` or annotated class, a Node file that exports nothing or a Next.js page or route, a Django
+  command or a decorator-registered class, a library's exported API). It is `LOW`: it can turn the
+  verdict into `WARN`, never into `FAIL`. To hide one that is used through reflection or generated
+  code, add its fingerprint to `suppress` in `archynt.yml`.
 - Annotations need no token, so they also appear on PRs from forks.
 
 ## Configure it per repository

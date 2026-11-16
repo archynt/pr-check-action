@@ -351,6 +351,25 @@ test('a dead code candidate from the scan is written as a notice on its line wit
   assert.deepEqual(calls.failures, []);
 });
 
+test('a layer violation from the scan is written as a failure on the line of its import with this version', async () => {
+  const violation = {
+    path: 'src/domain/order.ts',
+    startLine: 3,
+    endLine: 3,
+    level: 'failure',
+    title: 'Layer violation: domain → web',
+    message: '`src/domain/order.ts` imports `src/web/http.ts`; `domain` may depend on: none.\nFingerprint: v1:LAYER_VIOLATION:src/domain/order.ts,src/web/http.ts',
+  };
+  const { calls, deps } = harness({ json: { ...ANALYZED, annotations: [violation], annotationsOmitted: 0 } });
+
+  await run(deps);
+
+  assert.deepEqual(calls.annotations, [
+    { level: 'error', message: violation.message, properties: { title: violation.title, file: 'src/domain/order.ts', startLine: 3, endLine: 3 } },
+  ]);
+  assert.deepEqual(calls.failures, []);
+});
+
 test('at most eight annotations per level, and the job summary says how many were left out', async () => {
   const sent = [...annotations(10, 'failure'), ...annotations(10, 'warning'), ...annotations(10, 'notice')];
   const { calls, deps } = harness({ json: { ...ANALYZED, annotations: sent, annotationsOmitted: 4 } });

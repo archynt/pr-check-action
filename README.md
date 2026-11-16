@@ -109,6 +109,25 @@ suppress:
   the top of the summary.
 - Copy a fingerprint from the `Fingerprint:` line of an annotation or the comment.
 
+Declare layers to fail a PR that adds an import across a boundary your team forbids:
+
+```yaml
+layers:
+  - name: domain
+    paths: ["src/domain/**"]
+    mayDependOn: []          # domain may use no other layer
+  - name: web
+    paths: ["src/web/**"]
+    mayDependOn: [domain]
+```
+
+- A file belongs to the first layer whose `paths` include it. Files in no layer are under no rule.
+- Only imports the PR adds count. Each one is annotated on the line of the import; `severity: medium`
+  on a layer warns instead of failing.
+- Imports are those between files of the repository: relative imports in JavaScript and TypeScript
+  (not path aliases), the module's packages in Go, the project's classes in Java and the repository's
+  modules in Python.
+
 On a PR from a fork, the workflow that sends the scan comes from the PR, so a fork author can change
 what is scanned; the verdict never fails the job either way. The full reference is at
 [archynt.com/docs/archynt-yml](https://archynt.com/docs/archynt-yml).
